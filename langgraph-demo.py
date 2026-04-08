@@ -7,6 +7,7 @@ from demo_support import (
     build_model,
     format_tool_log,
     load_project_env,
+    stream_graph_result,
     stringify_content,
 )
 from langchain.tools import tool
@@ -33,7 +34,12 @@ def divide(a: float, b: float) -> float:
     return a / b
 
 
-async def run_graph(prompt: str):
+async def run_graph(
+    prompt: str,
+    *,
+    show_tool_log: bool = False,
+    stream: bool = True,
+):
     model = build_model()
     tools = [add, multiply, divide, *(await load_mcp_tools())]
     tools_by_name = {tool_item.name: tool_item for tool_item in tools}
@@ -79,9 +85,16 @@ async def run_graph(prompt: str):
     graph.add_conditional_edges("llm_call", should_continue, ["tool_node", END])
     graph.add_edge("tool_node", "llm_call")
     compiled_graph = graph.compile()
-    return await compiled_graph.ainvoke(
-        {"messages": [{"role": "user", "content": prompt}]}
-    )
+    payload = {"messages": [{"role": "user", "content": prompt}]}
+
+    if stream:
+        return await stream_graph_result(
+            compiled_graph,
+            payload,
+            show_tool_log=show_tool_log,
+        )
+
+    return await compiled_graph.ainvoke(payload)
 
 
 def parse_args() -> argparse.Namespace:
@@ -101,6 +114,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print MCP/tool call logs before the final answer.",
     )
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Disable streaming and wait for the full final answer before printing.",
+    )
     return parser.parse_args()
 
 
@@ -115,14 +133,21 @@ def main() -> int:
     if server_names:
         print(f"MCP servers: {', '.join(server_names)}")
 
-    result = asyncio.run(run_graph(prompt))
+    result = asyncio.run(
+        run_graph(
+            prompt,
+            show_tool_log=args.show_tool_log,
+            stream=not args.no_stream,
+        )
+    )
 
-    if args.show_tool_log:
-        for index, message in enumerate(result["messages"], start=1):
-            for line in format_tool_log(index, message):
-                print(line)
+    if args.no_stream:
+        if args.show_tool_log:
+            for index, message in enumerate(result["messages"], start=1):
+                for line in format_tool_log(index, message):
+                    print(line)
 
-    print(stringify_content(result["messages"][-1].content))
+        print(stringify_content(result["messages"][-1].content))
 
     return 0
 

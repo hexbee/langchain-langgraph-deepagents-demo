@@ -64,7 +64,11 @@ def stringify_content(content: Any) -> str:
                 if isinstance(text, str):
                     parts.append(text)
                 else:
-                    parts.append(str(item))
+                    content_text = item.get("content")
+                    if isinstance(content_text, str):
+                        parts.append(content_text)
+                    else:
+                        parts.append(str(item))
             else:
                 parts.append(str(item))
         return "\n".join(part for part in parts if part)
@@ -88,3 +92,139 @@ def format_tool_log(message_count: int, message: Any) -> list[str]:
         lines.append(f"[tool-log:{message_count}] result {tool_name}: {content}")
 
     return lines
+
+
+def _unwrap_message_value(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if hasattr(value, "value"):
+        return _unwrap_message_value(value.value)
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def iter_messages_from_update(update_data: Any) -> list[Any]:
+    if not isinstance(update_data, dict):
+        return []
+
+    messages: list[Any] = []
+    for node_update in update_data.values():
+        if isinstance(node_update, dict) and "messages" in node_update:
+            messages.extend(_unwrap_message_value(node_update["messages"]))
+    return messages
+
+
+class StreamPrinter:
+    def __init__(self, show_tool_log: bool = False):
+        self.show_tool_log = show_tool_log
+        self.answer_parts: list[str] = []
+        self.latest_ai_message = ""
+        self._answer_line_open = False
+        self._printed_text = False
+        self._seen_tool_messages: set[tuple[Any, ...]] = set()
+        self._message_count = 0
+
+    def emit_text(self, text: str) -> None:
+        if not text:
+            return
+        print(text, end="", flush=True)
+        self.answer_parts.append(text)
+        self._answer_line_open = True
+        self._printed_text = True
+
+    def emit_line(self, line: str) -> None:
+        if self._answer_line_open:
+            print(flush=True)
+            self._answer_line_open = False
+        print(line, flush=True)
+
+    def record_message(self, message: Any) -> None:
+        content = stringify_content(getattr(message, "content", "")).strip()
+        if getattr(message, "type", "") == "ai" and content:
+            self.latest_ai_message = content
+
+        if not self.show_tool_log:
+            return
+
+        if (
+            not getattr(message, "tool_calls", None)
+            and getattr(message, "type", "") != "tool"
+        ):
+            return
+
+        fingerprint = (
+            getattr(message, "type", type(message).__name__),
+            getattr(message, "id", None),
+            getattr(message, "name", None),
+            getattr(message, "tool_call_id", None),
+            tuple(
+                tool_call.get("id")
+                for tool_call in (getattr(message, "tool_calls", None) or [])
+            ),
+            stringify_content(getattr(message, "content", ""))[:200],
+        )
+        if fingerprint in self._seen_tool_messages:
+            return
+
+        self._seen_tool_messages.add(fingerprint)
+        self._message_count += 1
+        for line in format_tool_log(self._message_count, message):
+            self.emit_line(line)
+
+    def handle_stream_chunk(self, chunk: Any) -> None:
+        if not isinstance(chunk, dict):
+            return
+
+        chunk_type = chunk.get("type")
+        if chunk_type == "messages":
+            message_chunk, _metadata = chunk["data"]
+            self.emit_text(stringify_content(message_chunk.content))
+            return
+
+        if chunk_type == "updates":
+            for message in iter_messages_from_update(chunk["data"]):
+                self.record_message(message)
+
+    def final_text(self) -> str:
+        streamed = "".join(self.answer_parts).strip()
+        return streamed or self.latest_ai_message
+
+    def finish(self) -> None:
+        if self._answer_line_open:
+            print(flush=True)
+            self._answer_line_open = False
+
+        final_text = self.final_text()
+        if final_text and not self._printed_text:
+            print(final_text, flush=True)
+            self._printed_text = True
+
+
+async def stream_graph_result(
+    runnable: Any,
+    payload: dict[str, Any],
+    *,
+    show_tool_log: bool = False,
+) -> str:
+    printer = StreamPrinter(show_tool_log=show_tool_log)
+
+    async for chunk in runnable.astream(
+        payload,
+        stream_mode=["messages", "updates"],
+        version="v2",
+    ):
+        printer.handle_stream_chunk(chunk)
+
+    printer.finish()
+    return printer.final_text()
+
+
+async def stream_chat_model_response(model: Any, messages: list[Any]) -> str:
+    printer = StreamPrinter(show_tool_log=False)
+
+    async for chunk in model.astream(messages):
+        printer.emit_text(stringify_content(chunk.content))
+
+    printer.finish()
+    return printer.final_text()

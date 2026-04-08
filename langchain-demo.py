@@ -7,6 +7,8 @@ from demo_support import (
     build_model,
     format_tool_log,
     load_project_env,
+    stream_chat_model_response,
+    stream_graph_result,
     stringify_content,
 )
 from langchain.agents import create_agent
@@ -31,10 +33,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print MCP/tool call logs before the final answer.",
     )
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Disable streaming and wait for the full final answer before printing.",
+    )
     return parser.parse_args()
 
 
-async def run_prompt(prompt: str, show_tool_log: bool = False) -> str:
+async def run_prompt(
+    prompt: str,
+    *,
+    show_tool_log: bool = False,
+    stream: bool = True,
+) -> str:
     model = build_model()
     mcp_tools = await load_mcp_tools()
 
@@ -47,9 +59,16 @@ async def run_prompt(prompt: str, show_tool_log: bool = False) -> str:
                 "Use MCP tools when they help answer the user."
             ),
         )
-        result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": prompt}]}
-        )
+        payload = {"messages": [{"role": "user", "content": prompt}]}
+
+        if stream:
+            return await stream_graph_result(
+                agent,
+                payload,
+                show_tool_log=show_tool_log,
+            )
+
+        result = await agent.ainvoke(payload)
 
         if show_tool_log:
             for index, message in enumerate(result["messages"], start=1):
@@ -58,12 +77,14 @@ async def run_prompt(prompt: str, show_tool_log: bool = False) -> str:
 
         return stringify_content(result["messages"][-1].content)
 
-    response = await model.ainvoke(
-        [
-            SystemMessage(content="You are a concise and accurate AI assistant."),
-            HumanMessage(content=prompt),
-        ]
-    )
+    messages = [
+        SystemMessage(content="You are a concise and accurate AI assistant."),
+        HumanMessage(content=prompt),
+    ]
+    if stream:
+        return await stream_chat_model_response(model, messages)
+
+    response = await model.ainvoke(messages)
     return stringify_content(response.content)
 
 
@@ -80,7 +101,15 @@ def main() -> int:
     if server_names:
         print(f"MCP servers: {', '.join(server_names)}")
 
-    print(asyncio.run(run_prompt(prompt, show_tool_log=args.show_tool_log)))
+    result = asyncio.run(
+        run_prompt(
+            prompt,
+            show_tool_log=args.show_tool_log,
+            stream=not args.no_stream,
+        )
+    )
+    if args.no_stream:
+        print(result)
     return 0
 
 

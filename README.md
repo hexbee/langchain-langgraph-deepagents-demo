@@ -6,11 +6,15 @@ This repository is a small runnable Python demo that shows how to load the same 
 - `langgraph-demo.py`
 - `deepagents-demo.py`
 
-All three scripts now support a shared debug flag:
+All three scripts now support shared flags:
 
 - `--show-tool-log`
+- `--no-stream`
 
-When enabled, it prints tool call logs so you can verify that MCP tools were actually called, not just connected.
+By default, the scripts now stream output token by token when the upstream model supports it, so you can see partial output before the full run ends.
+
+- `--show-tool-log`: print tool call logs so you can verify that MCP tools were actually called, not just connected
+- `--no-stream`: disable streaming and wait for the final answer before printing
 
 ## Requirements
 
@@ -95,6 +99,12 @@ Show tool logs:
 uv run python langgraph-demo.py --show-tool-log "Use an MCP tool from the OpenAI developer docs server to find one OpenAI API endpoint related to models. Briefly answer in Chinese."
 ```
 
+Disable streaming:
+
+```sh
+uv run python langgraph-demo.py --no-stream
+```
+
 ### DeepAgents
 
 Default run:
@@ -107,6 +117,12 @@ Show tool logs:
 
 ```sh
 uv run python deepagents-demo.py --show-tool-log "Use an MCP tool from the OpenAI developer docs server to find one OpenAI API endpoint related to models. Briefly answer in Chinese."
+```
+
+Disable streaming:
+
+```sh
+uv run python deepagents-demo.py --no-stream
 ```
 
 ## How To Verify MCP Was Really Used
@@ -146,6 +162,14 @@ If you only see the final answer and no tool logs, one of these is likely true:
 
 - Uses `create_deep_agent(...)`
 - Smallest example for DeepAgents integration
+
+## Streaming Notes
+
+- `langchain-demo.py` streams with `agent.astream(...)` when MCP tools are loaded, and with `model.astream(...)` otherwise
+- `langgraph-demo.py` and `deepagents-demo.py` use `astream(..., stream_mode=["messages", "updates"], version="v2")`
+- `stream_mode="messages"` is what lets the terminal print partial LLM output as tokens arrive
+- `stream_mode="updates"` is used to keep `--show-tool-log` working during streaming
+- If an upstream model provider does not emit token chunks, the scripts fall back to printing the final answer at the end
 
 ## Important Files
 
