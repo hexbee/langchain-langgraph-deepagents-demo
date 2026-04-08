@@ -1,76 +1,20 @@
 from __future__ import annotations
 
 import argparse
-import os
-from pathlib import Path
-from typing import Any
+import asyncio
 
-from dotenv import load_dotenv
-from langchain.chat_models import init_chat_model
+from demo_support import build_model, load_project_env, stringify_content
+from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage
-
-
-def load_project_env() -> None:
-    load_dotenv(dotenv_path=Path(__file__).resolve().with_name(".env"))
-
-
-def read_env(*names: str) -> str | None:
-    for name in names:
-        value = os.getenv(name)
-        if value:
-            return value
-    return None
-
-
-def require_env(*names: str) -> str:
-    value = read_env(*names)
-    if value:
-        return value
-    joined_names = ", ".join(names)
-    raise SystemExit(f"Missing environment variable. Set one of: {joined_names}")
-
-
-def build_model():
-    model_name = require_env("OPENAI_MODEL", "OPENAI_MODEL_NAME", "OPENAI_COMPAT_MODEL")
-    api_key = require_env("OPENAI_API_KEY", "OPENAI_COMPAT_API_KEY")
-    base_url = read_env("OPENAI_BASE_URL", "OPENAI_COMPAT_BASE_URL")
-
-    kwargs: dict[str, Any] = {
-        "model": model_name,
-        "model_provider": "openai",
-        "api_key": api_key,
-        "temperature": 0,
-        "use_responses_api": False,
-    }
-    if base_url:
-        kwargs["base_url"] = base_url
-
-    return init_chat_model(**kwargs)
-
-
-def stringify_content(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = item.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-                else:
-                    parts.append(str(item))
-            else:
-                parts.append(str(item))
-        return "\n".join(part for part in parts if part)
-    return str(content)
+from mcp_support import list_mcp_servers, load_mcp_tools
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Minimal LangChain chat demo with OpenAI-compatible configuration from .env."
+        description=(
+            "LangChain demo with OpenAI-compatible configuration from .env "
+            "and optional MCP tools from .mcp.json."
+        )
     )
     parser.add_argument(
         "prompt",
@@ -78,6 +22,33 @@ def parse_args() -> argparse.Namespace:
         help="Prompt to send to the model. If omitted, a default prompt is used.",
     )
     return parser.parse_args()
+
+
+async def run_prompt(prompt: str) -> str:
+    model = build_model()
+    mcp_tools = await load_mcp_tools()
+
+    if mcp_tools:
+        agent = create_agent(
+            model=model,
+            tools=mcp_tools,
+            system_prompt=(
+                "You are a concise and accurate AI assistant. "
+                "Use MCP tools when they help answer the user."
+            ),
+        )
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": prompt}]}
+        )
+        return stringify_content(result["messages"][-1].content)
+
+    response = await model.ainvoke(
+        [
+            SystemMessage(content="You are a concise and accurate AI assistant."),
+            HumanMessage(content=prompt),
+        ]
+    )
+    return stringify_content(response.content)
 
 
 def main() -> int:
@@ -88,16 +59,12 @@ def main() -> int:
         "Briefly explain the differences between LangChain, LangGraph, and "
         "DeepAgents. Answer in Simplified Chinese."
     )
-    model = build_model()
 
-    response = model.invoke(
-        [
-            SystemMessage(content="You are a concise and accurate AI assistant."),
-            HumanMessage(content=prompt),
-        ]
-    )
+    server_names = list_mcp_servers()
+    if server_names:
+        print(f"MCP servers: {', '.join(server_names)}")
 
-    print(stringify_content(response.content))
+    print(asyncio.run(run_prompt(prompt)))
     return 0
 
 

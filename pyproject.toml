@@ -7,6 +7,7 @@ requires-python = ">=3.12.10"
 dependencies = [
     "deepagents>=0.5.1",
     "langchain>=1.2.15",
+    "langchain-mcp-adapters>=0.2.2",
     "langchain-openai>=1.1.12",
     "langgraph>=1.1.6",
     "python-dotenv>=1.2.2",
@@ -15,3 +16,8 @@ dependencies = [
 [[tool.uv.index]]
 url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 default = true
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.9",
+]
