@@ -69,3 +69,22 @@ def stringify_content(content: Any) -> str:
                 parts.append(str(item))
         return "\n".join(part for part in parts if part)
     return str(content)
+
+
+def format_tool_log(message_count: int, message: Any) -> list[str]:
+    lines: list[str] = []
+
+    if getattr(message, "tool_calls", None):
+        for tool_call in message.tool_calls:
+            lines.append(
+                f"[tool-log:{message_count}] call {tool_call['name']} args={tool_call['args']}"
+            )
+
+    if getattr(message, "type", "") == "tool":
+        tool_name = getattr(message, "name", None) or "unknown_tool"
+        content = stringify_content(message.content).strip()
+        if len(content) > 500:
+            content = f"{content[:500]}..."
+        lines.append(f"[tool-log:{message_count}] result {tool_name}: {content}")
+
+    return lines

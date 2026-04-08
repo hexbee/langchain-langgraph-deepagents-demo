@@ -3,7 +3,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from demo_support import build_model, load_project_env, stringify_content
+from demo_support import (
+    build_model,
+    format_tool_log,
+    load_project_env,
+    stringify_content,
+)
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage
 from mcp_support import list_mcp_servers, load_mcp_tools
@@ -21,10 +26,15 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         help="Prompt to send to the model. If omitted, a default prompt is used.",
     )
+    parser.add_argument(
+        "--show-tool-log",
+        action="store_true",
+        help="Print MCP/tool call logs before the final answer.",
+    )
     return parser.parse_args()
 
 
-async def run_prompt(prompt: str) -> str:
+async def run_prompt(prompt: str, show_tool_log: bool = False) -> str:
     model = build_model()
     mcp_tools = await load_mcp_tools()
 
@@ -40,6 +50,12 @@ async def run_prompt(prompt: str) -> str:
         result = await agent.ainvoke(
             {"messages": [{"role": "user", "content": prompt}]}
         )
+
+        if show_tool_log:
+            for index, message in enumerate(result["messages"], start=1):
+                for line in format_tool_log(index, message):
+                    print(line)
+
         return stringify_content(result["messages"][-1].content)
 
     response = await model.ainvoke(
@@ -64,7 +80,7 @@ def main() -> int:
     if server_names:
         print(f"MCP servers: {', '.join(server_names)}")
 
-    print(asyncio.run(run_prompt(prompt)))
+    print(asyncio.run(run_prompt(prompt, show_tool_log=args.show_tool_log)))
     return 0
 
 

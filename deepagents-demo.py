@@ -4,7 +4,12 @@ import argparse
 import asyncio
 
 from deepagents import create_deep_agent
-from demo_support import build_model, load_project_env, stringify_content
+from demo_support import (
+    build_model,
+    format_tool_log,
+    load_project_env,
+    stringify_content,
+)
 from langchain_core.messages import HumanMessage
 from mcp_support import list_mcp_servers, load_mcp_tools
 
@@ -21,10 +26,15 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         help="Prompt to send to the agent. If omitted, a default prompt is used.",
     )
+    parser.add_argument(
+        "--show-tool-log",
+        action="store_true",
+        help="Print MCP/tool call logs before the final answer.",
+    )
     return parser.parse_args()
 
 
-async def run_agent(prompt: str) -> str:
+async def run_agent(prompt: str, show_tool_log: bool = False) -> str:
     agent = create_deep_agent(
         model=build_model(),
         tools=await load_mcp_tools(),
@@ -34,6 +44,12 @@ async def run_agent(prompt: str) -> str:
         ),
     )
     result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
+
+    if show_tool_log:
+        for index, message in enumerate(result["messages"], start=1):
+            for line in format_tool_log(index, message):
+                print(line)
+
     return stringify_content(result["messages"][-1].content)
 
 
@@ -49,7 +65,7 @@ def main() -> int:
     if server_names:
         print(f"MCP servers: {', '.join(server_names)}")
 
-    print(asyncio.run(run_agent(prompt)))
+    print(asyncio.run(run_agent(prompt, show_tool_log=args.show_tool_log)))
     return 0
 
 

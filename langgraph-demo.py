@@ -3,7 +3,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from demo_support import build_model, load_project_env, stringify_content
+from demo_support import (
+    build_model,
+    format_tool_log,
+    load_project_env,
+    stringify_content,
+)
 from langchain.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -55,7 +60,11 @@ async def run_graph(prompt: str):
                 tool_call["args"]
             )
             outputs.append(
-                ToolMessage(content=str(observation), tool_call_id=tool_call["id"])
+                ToolMessage(
+                    content=str(observation),
+                    tool_call_id=tool_call["id"],
+                    name=tool_call["name"],
+                )
             )
         return {"messages": outputs}
 
@@ -87,6 +96,11 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         help="Prompt to send to the graph. If omitted, a default prompt is used.",
     )
+    parser.add_argument(
+        "--show-tool-log",
+        action="store_true",
+        help="Print MCP/tool call logs before the final answer.",
+    )
     return parser.parse_args()
 
 
@@ -103,17 +117,12 @@ def main() -> int:
 
     result = asyncio.run(run_graph(prompt))
 
-    for index, message in enumerate(result["messages"], start=1):
-        print(f"[{index}] {message.type}")
-        if getattr(message, "tool_calls", None):
-            tool_names = ", ".join(
-                tool_call["name"] for tool_call in message.tool_calls
-            )
-            print(f"tool_calls: {tool_names}")
-        text = stringify_content(message.content)
-        if text:
-            print(text)
-        print()
+    if args.show_tool_log:
+        for index, message in enumerate(result["messages"], start=1):
+            for line in format_tool_log(index, message):
+                print(line)
+
+    print(stringify_content(result["messages"][-1].content))
 
     return 0
 
