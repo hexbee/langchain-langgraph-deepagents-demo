@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from deepagents import create_deep_agent
@@ -26,50 +27,63 @@ from skills_support import LOCAL_SKILLS_DIR, USER_SKILLS_DIR
 
 
 DEFAULT_THREAD_ID = "deepagents-demo-session"
+PROJECT_SKILLS_VIRTUAL_PATH = "/.agents/skills/"
+USER_SKILLS_VIRTUAL_PATH = "/user-skills/"
+
+DeepAgentsBackend = FilesystemBackend | LocalShellBackend | CompositeBackend
 
 
-def build_deepagents_skills_config() -> tuple[
-    list[str], FilesystemBackend | LocalShellBackend | CompositeBackend | None
-]:
-    return build_deepagents_skills_config_with_options(allow_shell=False)
+@dataclass(frozen=True)
+class DeepAgentsRuntimeConfig:
+    skill_sources: tuple[str, ...]
+    backend: DeepAgentsBackend | None
 
 
-def build_deepagents_skills_config_with_options(
-    *, allow_shell: bool
-) -> tuple[list[str], FilesystemBackend | LocalShellBackend | CompositeBackend | None]:
-    skill_sources: list[str] = []
-    default_backend = (
-        LocalShellBackend(
+def _build_default_backend(*, allow_shell: bool) -> DeepAgentsBackend:
+    if allow_shell:
+        return LocalShellBackend(
             root_dir=ROOT_DIR,
             virtual_mode=True,
             inherit_env=True,
         )
-        if allow_shell
-        else FilesystemBackend(root_dir=ROOT_DIR, virtual_mode=True)
-    )
-    routes = {}
+    return FilesystemBackend(root_dir=ROOT_DIR, virtual_mode=True)
+
+
+def _build_skill_sources_and_routes() -> tuple[list[str], dict[str, FilesystemBackend]]:
+    skill_sources: list[str] = []
+    routes: dict[str, FilesystemBackend] = {}
 
     # In virtual_mode, Deep Agents must read skills via backend-visible virtual paths,
     # not host absolute paths.
     if USER_SKILLS_DIR.is_dir():
-        routes["/user-skills/"] = FilesystemBackend(
+        routes[USER_SKILLS_VIRTUAL_PATH] = FilesystemBackend(
             root_dir=USER_SKILLS_DIR,
             virtual_mode=True,
         )
-        skill_sources.append("/user-skills/")
+        skill_sources.append(USER_SKILLS_VIRTUAL_PATH)
 
     if LOCAL_SKILLS_DIR.is_dir():
-        skill_sources.append("/.agents/skills/")
+        skill_sources.append(PROJECT_SKILLS_VIRTUAL_PATH)
+
+    return skill_sources, routes
+
+
+def build_deepagents_runtime_config(*, allow_shell: bool) -> DeepAgentsRuntimeConfig:
+    skill_sources, routes = _build_skill_sources_and_routes()
+    default_backend = _build_default_backend(allow_shell=allow_shell)
 
     if not skill_sources:
-        return [], default_backend if allow_shell else None
+        return DeepAgentsRuntimeConfig(
+            skill_sources=(),
+            backend=default_backend if allow_shell else None,
+        )
 
     backend = (
         CompositeBackend(default=default_backend, routes=routes)
         if routes
         else default_backend
     )
-    return skill_sources, backend
+    return DeepAgentsRuntimeConfig(skill_sources=tuple(skill_sources), backend=backend)
 
 
 def parse_args() -> argparse.Namespace:
@@ -252,9 +266,7 @@ async def run_agent(
     allow_shell: bool = False,
     interrupt_on_execute: bool = False,
 ) -> str:
-    skill_sources, backend = build_deepagents_skills_config_with_options(
-        allow_shell=allow_shell
-    )
+    runtime_config = build_deepagents_runtime_config(allow_shell=allow_shell)
     config = {"configurable": {"thread_id": thread_id}}
     agent = create_deep_agent(
         model=build_model(),
@@ -263,8 +275,8 @@ async def run_agent(
             "You are a concise demo Deep Agent. "
             "Answer directly unless tools are genuinely useful."
         ),
-        skills=skill_sources or None,
-        backend=backend,
+        skills=runtime_config.skill_sources or None,
+        backend=runtime_config.backend,
         checkpointer=MemorySaver(),
         interrupt_on={"execute": True} if interrupt_on_execute else None,
     )
