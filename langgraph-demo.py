@@ -10,10 +10,12 @@ from demo_support import (
     stream_graph_result,
     stringify_content,
 )
+from langchain_core.messages import SystemMessage
 from langchain.tools import tool
-from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.prebuilt import ToolNode
 from mcp_support import list_mcp_servers, load_mcp_tools
+from skills_support import append_prompt_text, build_skill_runtime
 
 
 @tool
@@ -41,46 +43,36 @@ async def run_graph(
     stream: bool = True,
 ):
     model = build_model()
+    skill_runtime = build_skill_runtime()
     tools = [add, multiply, divide, *(await load_mcp_tools())]
-    tools_by_name = {tool_item.name: tool_item for tool_item in tools}
+    tools.extend(skill_runtime.skill_tools)
     model_with_tools = model.bind_tools(tools)
+    system_prompt = append_prompt_text(
+        (
+            "You are a concise demo assistant. "
+            "Use arithmetic tools for calculations, MCP tools for external information, "
+            "and skill tools when a relevant skill applies."
+        ),
+        skill_runtime.skills_prompt,
+    )
 
     async def call_model(state: MessagesState):
         response = await model_with_tools.ainvoke(
             [
-                SystemMessage(
-                    content=(
-                        "You are a helpful math assistant. "
-                        "Use arithmetic tools for calculations and MCP tools when relevant."
-                    )
-                ),
+                SystemMessage(content=system_prompt),
                 *state["messages"],
             ]
         )
         return {"messages": [response]}
 
-    async def call_tools(state: MessagesState):
-        outputs = []
-        for tool_call in state["messages"][-1].tool_calls:
-            observation = await tools_by_name[tool_call["name"]].ainvoke(
-                tool_call["args"]
-            )
-            outputs.append(
-                ToolMessage(
-                    content=str(observation),
-                    tool_call_id=tool_call["id"],
-                    name=tool_call["name"],
-                )
-            )
-        return {"messages": outputs}
-
     def should_continue(state: MessagesState):
         last_message = state["messages"][-1]
         return "tool_node" if getattr(last_message, "tool_calls", None) else END
 
+    tool_node = ToolNode(tools, handle_tool_errors=True)
     graph = StateGraph(MessagesState)
     graph.add_node("llm_call", call_model)
-    graph.add_node("tool_node", call_tools)
+    graph.add_node("tool_node", tool_node)
     graph.add_edge(START, "llm_call")
     graph.add_conditional_edges("llm_call", should_continue, ["tool_node", END])
     graph.add_edge("tool_node", "llm_call")

@@ -6,6 +6,13 @@ This repository is a small runnable Python demo that shows how to load the same 
 - `langgraph-demo.py`
 - `deepagents-demo.py`
 
+It now also supports shared agent skills loaded from:
+
+- `~/.agents/skills/`
+- `./.agents/skills/`
+
+If the same skill name exists in both places, the project-local skill wins.
+
 All three scripts now support shared flags:
 
 - `--show-tool-log`
@@ -63,6 +70,52 @@ Notes:
 - Printing `MCP servers: ...` only means the server names exist in config.
 - To confirm real tool execution, use `--show-tool-log`.
 
+## Agent Skills
+
+All three demos can now discover agent skills from:
+
+- `~/.agents/skills/`
+- `./.agents/skills/`
+
+Expected layout:
+
+```text
+.agents/skills/
+  my-skill/
+    SKILL.md
+```
+
+`SKILL.md` should follow the common agent-skills style with YAML frontmatter:
+
+```md
+---
+name: my-skill
+description: What the skill does and when to use it
+---
+
+# My Skill
+...
+```
+
+Resolution order:
+
+- User-level skills are loaded first from `~/.agents/skills/`
+- Project-level skills are loaded second from `./.agents/skills/`
+- If names collide, the project-level skill overrides the user-level one
+
+Framework behavior:
+
+- `deepagents-demo.py` uses DeepAgents native `skills=[...]` support
+- `langchain-demo.py` injects discovered skill metadata into the system prompt and exposes `load_skill` plus `load_skill_resource`
+- `langgraph-demo.py` adds the same progressive-disclosure tools to its graph-based tool loop
+
+Notes:
+
+- `LangChain` and `LangGraph` now follow a 3-layer progressive disclosure model: metadata in prompt, `SKILL.md` via `load_skill`, supporting files via `load_skill_resource`
+- `DeepAgents` uses backend-visible virtual skill paths, so it can read project skills from `/.agents/skills/` and optional user skills from `/user-skills/` without relying on host absolute paths
+- In `DeepAgents`, the second and third disclosure layers show up as native file reads such as `read_file .../SKILL.md` and then `read_file .../visual-companion.md`
+- `deepagents-demo.py` also passes a thread id plus an in-memory checkpointer so the example follows the normal Deep Agents invocation pattern for thread-scoped state
+
 ## Run
 
 ### LangChain
@@ -85,6 +138,18 @@ Show tool logs:
 uv run python langchain-demo.py --show-tool-log "Use an MCP tool from the OpenAI developer docs server to find one OpenAI API endpoint related to models. Briefly answer in Chinese."
 ```
 
+Use a skill:
+
+```sh
+uv run python langchain-demo.py --show-tool-log "If there is a relevant agent skill for this task, use it before answering: help me design a new feature rollout plan."
+```
+
+Verify progressive disclosure:
+
+```sh
+uv run python langchain-demo.py --no-stream --show-tool-log "Use the brainstorming skill. First call load_skill for brainstorming, then load the referenced file visual-companion.md with load_skill_resource, and finally summarize in Simplified Chinese when the browser-based visual companion should be offered."
+```
+
 ### LangGraph
 
 Default run:
@@ -97,6 +162,18 @@ Show tool logs:
 
 ```sh
 uv run python langgraph-demo.py --show-tool-log "Use an MCP tool from the OpenAI developer docs server to find one OpenAI API endpoint related to models. Briefly answer in Chinese."
+```
+
+Use a skill:
+
+```sh
+uv run python langgraph-demo.py --show-tool-log "If a relevant skill exists, load it and then explain how to brainstorm a scoped implementation plan."
+```
+
+Verify progressive disclosure:
+
+```sh
+uv run python langgraph-demo.py --no-stream --show-tool-log "Use the brainstorming skill. First call load_skill for brainstorming, then load the referenced file visual-companion.md with load_skill_resource, and finally summarize in Simplified Chinese when the browser-based visual companion should be offered."
 ```
 
 Disable streaming:
@@ -119,10 +196,28 @@ Show tool logs:
 uv run python deepagents-demo.py --show-tool-log "Use an MCP tool from the OpenAI developer docs server to find one OpenAI API endpoint related to models. Briefly answer in Chinese."
 ```
 
+Use a skill:
+
+```sh
+uv run python deepagents-demo.py --show-tool-log "If a relevant agent skill exists, use it to help me structure a design before implementation."
+```
+
+Verify progressive disclosure:
+
+```sh
+uv run python deepagents-demo.py --no-stream --show-tool-log "Use the brainstorming skill and follow its progressive-disclosure workflow. If you need the detailed instructions, consult the skill and then any specifically referenced file such as visual-companion.md before summarizing in Simplified Chinese when the browser-based visual companion should be offered."
+```
+
 Disable streaming:
 
 ```sh
 uv run python deepagents-demo.py --no-stream
+```
+
+Reuse a specific thread id:
+
+```sh
+uv run python deepagents-demo.py --thread-id demo-session-1
 ```
 
 ## How To Verify MCP Was Really Used
@@ -150,17 +245,22 @@ If you only see the final answer and no tool logs, one of these is likely true:
 `langchain-demo.py`
 
 - Uses `create_agent(...)`
+- Loads reusable skills with metadata injection plus `load_skill` and `load_skill_resource`
 - Best for the simplest agent + tools example
 
 `langgraph-demo.py`
 
 - Uses `StateGraph`
 - Explicitly implements the `LLM -> tools -> LLM` loop
+- Uses LangGraph `ToolNode(..., handle_tool_errors=True)` so tool failures can be surfaced back to the model in the standard graph pattern
+- Reuses the same progressive-disclosure skill tools as the LangChain demo
 - Best for observing tool execution flow
 
 `deepagents-demo.py`
 
 - Uses `create_deep_agent(...)`
+- Uses DeepAgents native skills support with a virtual filesystem backend
+- Passes a thread id and in-memory checkpointer so the demo follows the thread-scoped Deep Agents calling pattern
 - Smallest example for DeepAgents integration
 
 ## Streaming Notes
@@ -175,6 +275,7 @@ If you only see the final answer and no tool logs, one of these is likely true:
 
 - `demo_support.py`: shared model setup, env loading, tool log formatting
 - `mcp_support.py`: loads MCP config and converts MCP tools into LangChain tools
+- `skills_support.py`: shared skill discovery, metadata injection, `load_skill`, and `load_skill_resource`
 - `.mcp.json`: MCP server config
 - `.env.exmaple`: env var example
 

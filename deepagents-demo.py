@@ -4,7 +4,10 @@ import argparse
 import asyncio
 
 from deepagents import create_deep_agent
+from deepagents.backends import CompositeBackend
+from deepagents.backends.filesystem import FilesystemBackend
 from demo_support import (
+    ROOT_DIR,
     build_model,
     format_tool_log,
     load_project_env,
@@ -12,7 +15,42 @@ from demo_support import (
     stringify_content,
 )
 from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.memory import MemorySaver
 from mcp_support import list_mcp_servers, load_mcp_tools
+from skills_support import LOCAL_SKILLS_DIR, USER_SKILLS_DIR
+
+
+DEFAULT_THREAD_ID = "deepagents-demo-session"
+
+
+def build_deepagents_skills_config() -> tuple[
+    list[str], FilesystemBackend | CompositeBackend | None
+]:
+    skill_sources: list[str] = []
+    default_backend = FilesystemBackend(root_dir=ROOT_DIR, virtual_mode=True)
+    routes = {}
+
+    # In virtual_mode, Deep Agents must read skills via backend-visible virtual paths,
+    # not host absolute paths.
+    if USER_SKILLS_DIR.is_dir():
+        routes["/user-skills/"] = FilesystemBackend(
+            root_dir=USER_SKILLS_DIR,
+            virtual_mode=True,
+        )
+        skill_sources.append("/user-skills/")
+
+    if LOCAL_SKILLS_DIR.is_dir():
+        skill_sources.append("/.agents/skills/")
+
+    if not skill_sources:
+        return [], None
+
+    backend = (
+        CompositeBackend(default=default_backend, routes=routes)
+        if routes
+        else default_backend
+    )
+    return skill_sources, backend
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,6 +75,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable streaming and wait for the full final answer before printing.",
     )
+    parser.add_argument(
+        "--thread-id",
+        default=DEFAULT_THREAD_ID,
+        help=(
+            "Thread id used for the agent run. Reuse the same value to follow "
+            "thread-scoped Deep Agents best practices."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -45,7 +91,10 @@ async def run_agent(
     *,
     show_tool_log: bool = False,
     stream: bool = True,
+    thread_id: str = DEFAULT_THREAD_ID,
 ) -> str:
+    skill_sources, backend = build_deepagents_skills_config()
+    config = {"configurable": {"thread_id": thread_id}}
     agent = create_deep_agent(
         model=build_model(),
         tools=await load_mcp_tools(),
@@ -53,6 +102,9 @@ async def run_agent(
             "You are a concise demo Deep Agent. "
             "Answer directly unless tools are genuinely useful."
         ),
+        skills=skill_sources or None,
+        backend=backend,
+        checkpointer=MemorySaver(),
     )
 
     payload = {"messages": [HumanMessage(content=prompt)]}
@@ -62,9 +114,10 @@ async def run_agent(
             agent,
             payload,
             show_tool_log=show_tool_log,
+            config=config,
         )
 
-    result = await agent.ainvoke(payload)
+    result = await agent.ainvoke(payload, config=config)
 
     if show_tool_log:
         for index, message in enumerate(result["messages"], start=1):
@@ -91,6 +144,7 @@ def main() -> int:
             prompt,
             show_tool_log=args.show_tool_log,
             stream=not args.no_stream,
+            thread_id=args.thread_id,
         )
     )
     if args.no_stream:

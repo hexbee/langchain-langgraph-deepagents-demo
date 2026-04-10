@@ -14,6 +14,7 @@ from demo_support import (
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage
 from mcp_support import list_mcp_servers, load_mcp_tools
+from skills_support import SkillsPromptMiddleware, build_skill_runtime
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,15 +50,23 @@ async def run_prompt(
 ) -> str:
     model = build_model()
     mcp_tools = await load_mcp_tools()
+    skill_runtime = build_skill_runtime()
+    agent_tools = list(mcp_tools)
+    middleware = []
 
-    if mcp_tools:
+    if skill_runtime.skill_tools:
+        agent_tools.extend(skill_runtime.skill_tools)
+        middleware.append(SkillsPromptMiddleware(skill_runtime.skills_prompt))
+
+    if agent_tools:
         agent = create_agent(
             model=model,
-            tools=mcp_tools,
+            tools=agent_tools,
             system_prompt=(
                 "You are a concise and accurate AI assistant. "
-                "Use MCP tools when they help answer the user."
+                "Use tools when they genuinely help answer the user."
             ),
+            middleware=middleware,
         )
         payload = {"messages": [{"role": "user", "content": prompt}]}
 
@@ -78,7 +87,16 @@ async def run_prompt(
         return stringify_content(result["messages"][-1].content)
 
     messages = [
-        SystemMessage(content="You are a concise and accurate AI assistant."),
+        SystemMessage(
+            content=(
+                "You are a concise and accurate AI assistant."
+                + (
+                    f"\n\n{skill_runtime.skills_prompt}"
+                    if not skill_runtime.skill_tools
+                    else ""
+                )
+            )
+        ),
         HumanMessage(content=prompt),
     ]
     if stream:

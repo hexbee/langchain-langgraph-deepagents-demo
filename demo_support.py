@@ -206,11 +206,13 @@ async def stream_graph_result(
     payload: dict[str, Any],
     *,
     show_tool_log: bool = False,
+    config: dict[str, Any] | None = None,
 ) -> str:
     printer = StreamPrinter(show_tool_log=show_tool_log)
 
     async for chunk in runnable.astream(
         payload,
+        config=config,
         stream_mode=["messages", "updates"],
         version="v2",
     ):
