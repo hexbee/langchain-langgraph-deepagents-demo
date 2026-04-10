@@ -97,4 +97,10 @@ async def load_mcp_tools(config_path: Path | None = None) -> list[BaseTool]:
         return []
 
     client = MultiServerMCPClient(connections, tool_name_prefix=True)
-    return await client.get_tools()
+    tools: list[BaseTool] = []
+    for server_name in connections:
+        try:
+            tools.extend(await client.get_tools(server_name=server_name))
+        except Exception as exc:  # noqa: BLE001
+            print(f"Skipping MCP server '{server_name}': {exc}")
+    return tools

@@ -179,7 +179,8 @@ class StreamPrinter:
         chunk_type = chunk.get("type")
         if chunk_type == "messages":
             message_chunk, _metadata = chunk["data"]
-            self.emit_text(stringify_content(message_chunk.content))
+            if getattr(message_chunk, "type", "") in {"ai", "AIMessageChunk"}:
+                self.emit_text(stringify_content(message_chunk.content))
             return
 
         if chunk_type == "updates":
@@ -207,8 +208,9 @@ async def stream_graph_result(
     *,
     show_tool_log: bool = False,
     config: dict[str, Any] | None = None,
+    printer: StreamPrinter | None = None,
 ) -> str:
-    printer = StreamPrinter(show_tool_log=show_tool_log)
+    active_printer = printer or StreamPrinter(show_tool_log=show_tool_log)
 
     async for chunk in runnable.astream(
         payload,
@@ -216,10 +218,10 @@ async def stream_graph_result(
         stream_mode=["messages", "updates"],
         version="v2",
     ):
-        printer.handle_stream_chunk(chunk)
+        active_printer.handle_stream_chunk(chunk)
 
-    printer.finish()
-    return printer.final_text()
+    active_printer.finish()
+    return active_printer.final_text()
 
 
 async def stream_chat_model_response(model: Any, messages: list[Any]) -> str:

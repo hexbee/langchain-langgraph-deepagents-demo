@@ -23,6 +23,11 @@ By default, the scripts now stream output token by token when the upstream model
 - `--show-tool-log`: print tool call logs so you can verify that MCP tools were actually called, not just connected
 - `--no-stream`: disable streaming and wait for the final answer before printing
 
+`deepagents-demo.py` also supports:
+
+- `--allow-shell`: enable Deep Agents `execute` tool via `LocalShellBackend`
+- `--interrupt-on-execute`: require approval before the `execute` tool runs, must be used with `--allow-shell`
+
 ## Requirements
 
 - Python `>=3.12.10`
@@ -220,6 +225,26 @@ Reuse a specific thread id:
 uv run python deepagents-demo.py --thread-id demo-session-1
 ```
 
+Enable local shell execution:
+
+```sh
+uv run python deepagents-demo.py --allow-shell --show-tool-log "Use execute to run `python --version`, then answer in Simplified Chinese."
+```
+
+Enable local shell execution with approval before each command:
+
+```sh
+uv run python deepagents-demo.py --allow-shell --interrupt-on-execute --show-tool-log "Use execute to run `python --version`, then answer in Simplified Chinese."
+```
+
+Important:
+
+- `--allow-shell` uses Deep Agents `LocalShellBackend`
+- This enables unrestricted shell execution on your local machine
+- It is disabled by default and should only be used in trusted local workflows
+- `--interrupt-on-execute` adds Deep Agents `interrupt_on={"execute": True}` so shell commands pause for approval before execution
+- When paused, the CLI will prompt in the terminal for `approve`, `edit`, or `reject`, then resume the run automatically
+
 ## How To Verify MCP Was Really Used
 
 With `--show-tool-log`, real tool usage looks like this:
@@ -260,6 +285,8 @@ If you only see the final answer and no tool logs, one of these is likely true:
 
 - Uses `create_deep_agent(...)`
 - Uses DeepAgents native skills support with a virtual filesystem backend
+- Can opt into the `execute` tool with `--allow-shell`, which switches the default backend to `LocalShellBackend`
+- Can require approval before shell execution with `--interrupt-on-execute`
 - Passes a thread id and in-memory checkpointer so the demo follows the thread-scoped Deep Agents calling pattern
 - Smallest example for DeepAgents integration
 
