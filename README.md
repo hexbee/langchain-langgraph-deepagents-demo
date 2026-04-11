@@ -118,6 +118,7 @@ Notes:
 
 - `LangChain` and `LangGraph` now follow a 3-layer progressive disclosure model: metadata in prompt, `SKILL.md` via `load_skill`, supporting files via `load_skill_resource`
 - `DeepAgents` uses backend-visible virtual skill paths, so it can read project skills from `/.agents/skills/` and optional user skills from `/user-skills/` without relying on host absolute paths
+- By default, `deepagents-demo.py` keeps the main workspace thread-scoped and temporary; only the configured skill directories are mounted from disk
 - In `DeepAgents`, the second and third disclosure layers show up as native file reads such as `read_file .../SKILL.md` and then `read_file .../visual-companion.md`
 - `deepagents-demo.py` also passes a thread id plus an in-memory checkpointer so the example follows the normal Deep Agents invocation pattern for thread-scoped state
 
@@ -241,6 +242,7 @@ Important:
 
 - `--allow-shell` uses Deep Agents `LocalShellBackend`
 - This enables unrestricted shell execution on your local machine
+- It also switches the main Deep Agents workspace from thread-scoped temporary storage to the real local project directory
 - It is disabled by default and should only be used in trusted local workflows
 - `--interrupt-on-execute` adds Deep Agents `interrupt_on={"execute": True}` so shell commands pause for approval before execution
 - When paused, the CLI will prompt in the terminal for `approve`, `edit`, or `reject`, then resume the run automatically
@@ -284,8 +286,9 @@ If you only see the final answer and no tool logs, one of these is likely true:
 `deepagents-demo.py`
 
 - Uses `create_deep_agent(...)`
-- Uses DeepAgents native skills support with a virtual filesystem backend
-- Can opt into the `execute` tool with `--allow-shell`, which switches the default backend to `LocalShellBackend`
+- Uses DeepAgents native skills support with skill directories mounted on dedicated virtual paths
+- Keeps the default workspace thread-scoped and temporary unless `--allow-shell` is enabled
+- Can opt into the `execute` tool with `--allow-shell`, which switches the main workspace backend to `LocalShellBackend`
 - Can require approval before shell execution with `--interrupt-on-execute`
 - Passes a thread id and in-memory checkpointer so the demo follows the thread-scoped Deep Agents calling pattern
 - Smallest example for DeepAgents integration

@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from deepagents import create_deep_agent
-from deepagents.backends import CompositeBackend
+from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.local_shell import LocalShellBackend
 from demo_support import (
@@ -31,22 +32,28 @@ PROJECT_SKILLS_VIRTUAL_PATH = "/.agents/skills/"
 USER_SKILLS_VIRTUAL_PATH = "/user-skills/"
 
 DeepAgentsBackend = FilesystemBackend | LocalShellBackend | CompositeBackend
+DeepAgentsBackendFactory = Callable[[Any], DeepAgentsBackend]
+ConfiguredDeepAgentsBackend = DeepAgentsBackend | DeepAgentsBackendFactory
 
 
 @dataclass(frozen=True)
 class DeepAgentsRuntimeConfig:
     skill_sources: tuple[str, ...]
-    backend: DeepAgentsBackend | None
+    backend: ConfiguredDeepAgentsBackend | None
 
 
-def _build_default_backend(*, allow_shell: bool) -> DeepAgentsBackend:
+def _build_shell_backend() -> LocalShellBackend:
+    return LocalShellBackend(
+        root_dir=ROOT_DIR,
+        virtual_mode=True,
+        inherit_env=True,
+    )
+
+
+def _build_default_backend(*, allow_shell: bool) -> ConfiguredDeepAgentsBackend | None:
     if allow_shell:
-        return LocalShellBackend(
-            root_dir=ROOT_DIR,
-            virtual_mode=True,
-            inherit_env=True,
-        )
-    return FilesystemBackend(root_dir=ROOT_DIR, virtual_mode=True)
+        return _build_shell_backend()
+    return None
 
 
 def _build_skill_sources_and_routes() -> tuple[list[str], dict[str, FilesystemBackend]]:
@@ -63,6 +70,10 @@ def _build_skill_sources_and_routes() -> tuple[list[str], dict[str, FilesystemBa
         skill_sources.append(USER_SKILLS_VIRTUAL_PATH)
 
     if LOCAL_SKILLS_DIR.is_dir():
+        routes[PROJECT_SKILLS_VIRTUAL_PATH] = FilesystemBackend(
+            root_dir=LOCAL_SKILLS_DIR,
+            virtual_mode=True,
+        )
         skill_sources.append(PROJECT_SKILLS_VIRTUAL_PATH)
 
     return skill_sources, routes
@@ -73,16 +84,20 @@ def build_deepagents_runtime_config(*, allow_shell: bool) -> DeepAgentsRuntimeCo
     default_backend = _build_default_backend(allow_shell=allow_shell)
 
     if not skill_sources:
-        return DeepAgentsRuntimeConfig(
-            skill_sources=(),
-            backend=default_backend if allow_shell else None,
-        )
+        return DeepAgentsRuntimeConfig(skill_sources=(), backend=default_backend)
 
-    backend = (
-        CompositeBackend(default=default_backend, routes=routes)
-        if routes
-        else default_backend
-    )
+    if allow_shell:
+        backend: ConfiguredDeepAgentsBackend = CompositeBackend(
+            default=_build_shell_backend(),
+            routes=routes,
+        )
+    else:
+        # Keep the main workspace thread-scoped by default. Only the skills
+        # directories are mounted from the host filesystem.
+        def backend(runtime: Any) -> DeepAgentsBackend:
+            _ = runtime
+            return CompositeBackend(default=StateBackend(), routes=routes)
+
     return DeepAgentsRuntimeConfig(skill_sources=tuple(skill_sources), backend=backend)
 
 
@@ -121,7 +136,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Enable Deep Agents execute support via LocalShellBackend. "
-            "This exposes unrestricted local shell commands on the host machine."
+            "This also switches the main workspace from thread-scoped storage "
+            "to the real local project directory."
         ),
     )
     parser.add_argument(
@@ -273,7 +289,9 @@ async def run_agent(
         tools=await load_mcp_tools(),
         system_prompt=(
             "You are a concise demo Deep Agent. "
-            "Answer directly unless tools are genuinely useful."
+            "Answer directly unless tools are genuinely useful. "
+            "Treat files under /.agents/skills/ and /user-skills/ as read-only "
+            "reference material unless the user explicitly asks to modify a skill."
         ),
         skills=runtime_config.skill_sources or None,
         backend=runtime_config.backend,
@@ -323,9 +341,15 @@ def main() -> int:
     server_names = list_mcp_servers()
     if server_names:
         print(f"MCP servers: {', '.join(server_names)}")
+    if not args.allow_shell:
+        print(
+            "Default Deep Agents workspace: thread-scoped temporary storage. "
+            "Only configured skill directories are mounted from disk."
+        )
     if args.allow_shell:
         print(
-            "Shell access enabled: Deep Agents can execute unrestricted local commands."
+            "Shell access enabled: Deep Agents can execute unrestricted local "
+            "commands and use the real local project directory as its workspace."
         )
     if args.interrupt_on_execute:
         print("Execute approval enabled: shell commands will pause for approval.")
